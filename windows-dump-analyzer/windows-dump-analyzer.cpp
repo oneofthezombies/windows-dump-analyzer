@@ -2,11 +2,9 @@
 //
 #include <Windows.h>
 #include <functional>
-#include <stdexcept>
 #include <iostream>
 #include <sstream>
 #include <string>
-#include <memory>
 
 class DumpFile
 {
