@@ -6,64 +6,67 @@
 #include <sstream>
 #include <string>
 
-class DumpFile
-{
-public:
-    DumpFile(const std::string& dumpPath)
-        : dumpPath_(dumpPath) {
-        std::cout << "Dump()\n";
-
-    }
-
-    ~DumpFile() {
-        std::cout << "~Dump()\n";
-
-    }
-
-private:
-    std::string dumpPath_;
-};
-
 struct Error {
-    Error(const uint32_t code, std::string&& message)
-        : code(code), message(std::move(message)) {}
+    Error(const DWORD code, std::string&& message)
+        : code(static_cast<uint32_t>(code))
+        , message(std::move(message)) {}
 
     uint32_t code;
     std::string message;
 };
 
+std::ostream& operator<<(std::ostream& ostream, const Error& error) {
+    ostream << "error code: " << error.code << ", message: " << error.message;
+    return ostream;
+}
+
 struct WindowsHandle {
-    WindowsHandle(HANDLE handle) 
-        : handle(handle) {}
-
-    ~WindowsHandle() {
-        if (handle != nullptr) {
-            if (::CloseHandle(handle) == FALSE) {
-                // critical error
+    struct Deleter {
+        void operator()(HANDLE handle) {
+            if (handle == nullptr) {
+                return;
             }
-        }
-    }
 
-    HANDLE handle;
+            if (handle == INVALID_HANDLE_VALUE) {
+                return;
+            }
+
+            if (::CloseHandle(handle) == TRUE) {
+                return;
+            }
+
+            // critical error
+        }
+    };
+
+    using Pointer = std::unique_ptr<std::remove_pointer<HANDLE>::type, Deleter>;
+
+    WindowsHandle() = delete;
+    WindowsHandle& operator=(const WindowsHandle&) = delete;
 };
 
-struct WindowsMappedViewOfFile {
-    WindowsMappedViewOfFile(PVOID startingAddress)
-        : startingAddress(startingAddress) {}
-
-    ~WindowsMappedViewOfFile() {
-        if (startingAddress != nullptr) {
-            if (::UnmapViewOfFileEx(startingAddress, MEM_UNMAP_WITH_TRANSIENT_BOOST) == FALSE) {
-                // critical error
+struct MappedViewOfFile {
+    struct Deleter {
+        void operator()(PVOID startingAddress) {
+            if (startingAddress == nullptr) {
+                return;
             }
-        }
-    }
 
-    PVOID startingAddress;
+            if (::UnmapViewOfFileEx(startingAddress, MEM_UNMAP_WITH_TRANSIENT_BOOST) == TRUE) {
+                return;
+            }
+
+            // critical error
+        }
+    };
+
+    using Pointer = std::unique_ptr<std::remove_pointer<PVOID>::type, Deleter>;
+
+    MappedViewOfFile() = delete;
+    MappedViewOfFile& operator=(const MappedViewOfFile&) = delete;
 };
 
-class StringBuilder {
-public:
+struct StringBuilder {
     StringBuilder() {}
 
     template<typename T>
@@ -80,74 +83,93 @@ private:
     std::stringstream stringstream_;
 };
 
-void create(const std::string& dumpFilePath, std::function<void(DumpFile)> onSuccess, std::function<void(Error)> onError = std::function<void(Error)>{}) {
-    WindowsHandle fileHandle(::CreateFileA(
-        dumpFilePath.c_str(),
-        GENERIC_READ,
-        FILE_SHARE_READ,
-        NULL,
-        OPEN_EXISTING,
-        FILE_ATTRIBUTE_NORMAL,
-        NULL));
-    if (fileHandle.handle == INVALID_HANDLE_VALUE) {
-        onError(Error(static_cast<uint32_t>(::GetLastError()), StringBuilder() << "failed to open dump file. path: " << dumpFilePath));
-        return;
+struct DumpFile
+{
+    using Pointer = std::unique_ptr<DumpFile>;
+
+    DumpFile(const std::string& dumpPath, const int64_t dumpFileSize, MappedViewOfFile::Pointer&& mappedViewOfFile)
+        : dumpPath_(dumpPath)
+        , dumpFileSize_(dumpFileSize)
+        , mappedViewOfFile_(std::move(mappedViewOfFile)) {
     }
 
-    FILE_STANDARD_INFO fileStandardInfo{};
-    if (::GetFileInformationByHandleEx(
-        fileHandle.handle,
-        FileStandardInfo,
-        &fileStandardInfo,
-        sizeof(fileStandardInfo)) == FALSE) {
-        onError(Error(static_cast<uint32_t>(::GetLastError()), StringBuilder() << "failed to get file information. path: " << dumpFilePath));
-        return;
+    static DumpFile::Pointer open(const std::string& dumpFilePath, std::function<void(Error)> onError = std::function<void(Error)>{}) {
+        const WindowsHandle::Pointer fileHandle(::CreateFileA(
+            dumpFilePath.c_str(),
+            GENERIC_READ,
+            FILE_SHARE_READ,
+            NULL,
+            OPEN_EXISTING,
+            FILE_ATTRIBUTE_NORMAL,
+            NULL));
+        if (fileHandle.get() == INVALID_HANDLE_VALUE) {
+            onError(Error(::GetLastError(), StringBuilder() << "failed to open dump file. path: " << dumpFilePath));
+            return nullptr;
+        }
+
+        FILE_STANDARD_INFO fileStandardInfo{};
+        if (::GetFileInformationByHandleEx(
+            fileHandle.get(),
+            FileStandardInfo,
+            &fileStandardInfo,
+            sizeof(fileStandardInfo)) == FALSE) {
+            onError(Error(::GetLastError(), StringBuilder() << "failed to get file information. path: " << dumpFilePath));
+            return nullptr;
+        }
+
+        if (fileStandardInfo.AllocationSize.QuadPart == 0) {
+            onError(Error(::GetLastError(), StringBuilder() << "file size is zero. path: " << dumpFilePath));
+            return nullptr;
+        }
+
+        const int64_t fileSize = fileStandardInfo.EndOfFile.QuadPart;
+
+        const WindowsHandle::Pointer mappingHandle(::CreateFileMappingA(
+            fileHandle.get(),
+            NULL,
+            PAGE_READONLY,
+            NULL,
+            NULL,
+            NULL));
+        if (mappingHandle.get() == NULL) {
+            onError(Error(::GetLastError(), StringBuilder() << "failed to map file. path: " << dumpFilePath));
+            return nullptr;
+        }
+
+        MappedViewOfFile::Pointer mappedViewOfFile(::MapViewOfFileEx(
+            mappingHandle.get(),
+            FILE_MAP_READ,
+            NULL,
+            NULL,
+            NULL,
+            NULL));
+        if (mappedViewOfFile.get() == NULL) {
+            onError(Error(::GetLastError(), StringBuilder() << "failed to map view of file. path: " << dumpFilePath));
+            return nullptr;
+        }
+
+        const char minidumpHeader[] = "MDMP";
+        const size_t minidumpHeaderSize = sizeof(minidumpHeader) - 1;
+        if (::memcmp(mappedViewOfFile.get(), minidumpHeader, minidumpHeaderSize) != 0) {
+            onError(Error(::GetLastError(), StringBuilder() << "not a minidump file. path: " << dumpFilePath));
+            return nullptr;
+        }
+
+        return std::make_unique<DumpFile>(dumpFilePath, fileSize, std::move(mappedViewOfFile));
     }
 
-    if (fileStandardInfo.AllocationSize.QuadPart == 0) {
-        onError(Error(static_cast<uint32_t>(::GetLastError()), StringBuilder() << "file size is zero. path: " << dumpFilePath));
-        return;
-    }
+private:
+    std::string dumpPath_;
+    int64_t dumpFileSize_;
+    MappedViewOfFile::Pointer mappedViewOfFile_;
+};
 
-    WindowsHandle mappingHandle(::CreateFileMappingA(
-        fileHandle.handle,
-        NULL,
-        PAGE_READONLY,
-        NULL,
-        NULL,
-        NULL));
-    if (mappingHandle.handle == NULL) {
-        onError(Error(static_cast<uint32_t>(::GetLastError()), StringBuilder() << "failed to map file. path: " << dumpFilePath));
-        return;
-    }
-
-    WindowsMappedViewOfFile mappedViewOfFile(::MapViewOfFileEx(
-        mappingHandle.handle, 
-        FILE_MAP_READ, 
-        NULL, 
-        NULL, 
-        NULL, 
-        NULL));
-    if (mappedViewOfFile.startingAddress == NULL) {
-        onError(Error(static_cast<uint32_t>(GetLastError()), StringBuilder() << "failed to map view of file. path: " << dumpFilePath));
-        return;
-    }
-
-    const std::string minidumpHeader("MDMP");
-    if (::memcmp(mappedViewOfFile.startingAddress, minidumpHeader.c_str(), minidumpHeader.size()) != 0) {
-        onError(Error(static_cast<uint32_t>(GetLastError()), StringBuilder() << "not a minidump file. path: " << dumpFilePath));
-        return;
-    }
-
-
-}
 
 int main()
 {
     std::cout << "Hello World!\n";
-    create("test2.txt", [](DumpFile file) {
-        }, [](Error error) {
-            int i = 0;
+    DumpFile::Pointer dumpFile = DumpFile::open("chrome.dmp", [](Error error) {
+        std::cout << error;
         });
 
     return 0;
