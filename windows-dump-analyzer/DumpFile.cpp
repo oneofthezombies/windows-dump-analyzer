@@ -17,7 +17,7 @@ namespace wda {
             FILE_ATTRIBUTE_NORMAL,
             NULL));
         if (fileHandle.get() == INVALID_HANDLE_VALUE) {
-            return Failure(::GetLastError(), StringBuilder() << "failed to open dump file. path: " << dumpFilePath);
+            return Error(::GetLastError(), StringBuilder() << "failed to open dump file. path: " << dumpFilePath);
         }
 
         FILE_STANDARD_INFO fileStandardInfo{};
@@ -26,11 +26,11 @@ namespace wda {
             FileStandardInfo,
             &fileStandardInfo,
             sizeof(fileStandardInfo)) == FALSE) {
-            return Failure(::GetLastError(), StringBuilder() << "failed to get file information. path: " << dumpFilePath);
+            return Error(::GetLastError(), StringBuilder() << "failed to get file information. path: " << dumpFilePath);
         }
 
         if (fileStandardInfo.AllocationSize.QuadPart == 0) {
-            return Failure(::GetLastError(), StringBuilder() << "file size is zero. path: " << dumpFilePath);
+            return Error(::GetLastError(), StringBuilder() << "file size is zero. path: " << dumpFilePath);
         }
 
         const int64_t fileSize = fileStandardInfo.EndOfFile.QuadPart;
@@ -43,7 +43,7 @@ namespace wda {
             NULL,
             NULL));
         if (mappingHandle.get() == NULL) {
-            return Failure(::GetLastError(), StringBuilder() << "failed to map file. path: " << dumpFilePath);
+            return Error(::GetLastError(), StringBuilder() << "failed to map file. path: " << dumpFilePath);
         }
 
         MappedViewOfFile mappedViewOfFile(::MapViewOfFileEx(
@@ -54,13 +54,13 @@ namespace wda {
             NULL,
             NULL));
         if (mappedViewOfFile.get() == NULL) {
-            return Failure(::GetLastError(), StringBuilder() << "failed to map view of file. path: " << dumpFilePath);
+            return Error(::GetLastError(), StringBuilder() << "failed to map view of file. path: " << dumpFilePath);
         }
 
         const char minidumpHeader[] = "MDMP";
         const size_t minidumpHeaderSize = sizeof(minidumpHeader) - 1;
         if (::memcmp(mappedViewOfFile.get(), minidumpHeader, minidumpHeaderSize) != 0) {
-            return Failure(::GetLastError(), StringBuilder() << "not a minidump file. path: " << dumpFilePath);
+            return Error(::GetLastError(), StringBuilder() << "not a minidump file. path: " << dumpFilePath);
         }
 
         return DumpFile(dumpFilePath, fileSize, std::move(mappedViewOfFile));

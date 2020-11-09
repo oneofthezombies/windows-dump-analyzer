@@ -7,28 +7,27 @@ int main()
 
     DumpFileResult dumpFileResult = openDumpFile("chrome.dmp");
     if (!dumpFileResult) {
-        std::cout << dumpFileResult.getFailureResult();
+        std::cout << dumpFileResult.error();
     } else {
-        auto& dumpFile = dumpFileResult.getSuccessResult();
-        auto exceptionInfoResult = dumpFile.readExceptionStream();
+        auto exceptionInfoResult = dumpFileResult->readExceptionStream();
         if (exceptionInfoResult) {
             std::cout << "dump has exception info.\n";
         } else {
             std::cout << "dump has not exception info.\n";
         }
-        auto systemInfoResult = dumpFile.readSystemInfo();
+        auto systemInfoResult = dumpFileResult->readSystemInfo();
         if (systemInfoResult) {
             std::cout << "dump has system info.\n";
         } else {
             std::cout << "dump has not system info.\n";
         }
-        auto threadListResult = dumpFile.readThreadList();
+        auto threadListResult = dumpFileResult->readThreadList();
         if (threadListResult) {
             std::cout << "dump has thread list.\n";
         } else {
             std::cout << "dump has not thread list.\n";
         }
-        auto moduleListResult = dumpFile.readModuleList();
+        auto moduleListResult = dumpFileResult->readModuleList();
         if (moduleListResult) {
             std::cout << "dump has module list.\n";
         } else {

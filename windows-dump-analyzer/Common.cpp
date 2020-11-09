@@ -2,13 +2,13 @@
 #include <ostream>
 
 namespace wda {
-    Failure::Failure(DWORD code, std::string&& message)
+    Error::Error(DWORD code, std::string&& message)
         : code(static_cast<uint32_t>(code))
         , message(std::move(message)) {
     }
 
-    std::ostream& operator<<(std::ostream& ostream, const Failure& failure) {
-        ostream << "failure code: " << failure.code << ", message: " << failure.message;
+    std::ostream& operator<<(std::ostream& ostream, const Error& Error) {
+        ostream << "Error code: " << Error.code << ", message: " << Error.message;
         return ostream;
     }
 

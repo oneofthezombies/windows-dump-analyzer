@@ -11,7 +11,7 @@ namespace wda {
             MINIDUMP_DIRECTORY* minidumpDirectory = nullptr;
             void* streamPointer = nullptr;
             if (!::MiniDumpReadDumpStream(_mappedViewOfFile.get(), type, &minidumpDirectory, &streamPointer, nullptr)) {
-                return Failure(::GetLastError(), StringBuilder() << "minidump stream information does not exist. type: " << type);
+                return Error(::GetLastError(), StringBuilder() << "minidump stream information does not exist. type: " << type);
             }
 
             return DumpInfo(minidumpDirectory, static_cast<T*>(streamPointer));
